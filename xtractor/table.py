@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+import sys
 from os import path
 from types import ModuleType
 from typing import Any
@@ -25,28 +26,48 @@ class TableExtractor:
         """
         self.table_file_folder = table_file_folder
         self.extract_folder = extract_folder
-        self.flat_data_module_name = flat_data_module_name
+        
+        # Convert filesystem path to module path if needed
+        if os.path.sep in flat_data_module_name:
+            self.extract_folder_base = os.path.dirname(flat_data_module_name)
+            self.flat_data_module_name = os.path.basename(flat_data_module_name)
+        else:
+            self.extract_folder_base = extract_folder
+            self.flat_data_module_name = flat_data_module_name
 
         self.lower_fb_name_modules: dict[str, type] = {}
-        self.dump_wrapper_lib: ModuleType
+        self.flat_data_lib = None
+        self.dump_wrapper_lib = None
 
         self.__import_modules()
 
     def __import_modules(self):
+        """Import required modules for flatbuffer processing."""
         try:
-            flat_data_lib = importlib.import_module(self.flat_data_module_name)
+            # Add extract folder to Python path temporarily
+            sys.path.insert(0, self.extract_folder_base)
+            
+            self.flat_data_lib = importlib.import_module(self.flat_data_module_name)
             self.dump_wrapper_lib = importlib.import_module(
                 f"{self.flat_data_module_name}.dump_wrapper"
             )
-        except Exception as e:
+            
+            # Only set modules if import succeeds
+            if self.flat_data_lib:
+                self.lower_fb_name_modules = {
+                    t_name.lower(): t_class
+                    for t_name, t_class in self.flat_data_lib.__dict__.items()
+                }
+        except ImportError as e:
             notice(
-                f"Cannot import FlatData module. Make sure FlatData is available in Extracted folder. {e}",
+                f"Cannot import FlatData module from {self.extract_folder_base}. Error: {e}",
                 "error",
             )
-        self.lower_fb_name_modules = {
-            t_name.lower(): t_class
-            for t_name, t_class in flat_data_lib.__dict__.items()
-        }
+            raise
+        finally:
+            # Remove the path we added
+            if self.extract_folder_base in sys.path:
+                sys.path.remove(self.extract_folder_base)
 
     def _process_bytes_file(
         self, file_name: str, data: bytes
